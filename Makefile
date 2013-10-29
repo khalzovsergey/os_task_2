@@ -8,8 +8,8 @@ $(EXECUTABLE): $(OBJECTS)
 	$(CC) -o $(EXECUTABLE) $(OBJECTS)
 
 
-$(OBJECTS): Sources/main.c
-	$(CC) -c $(SOURCES)
+$(OBJECTS): $(SOURCES)
+	$(CC) -c $?
 
 
 clean:
