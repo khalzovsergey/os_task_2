@@ -1,51 +1,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <signal.h>
 #include <unistd.h>
-#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <fcntl.h>
 
 
-#define _DEBUG
-
-#ifdef _DEBUG
-
-#define TRACE printf("%s; %d\n", __FILE__, __LINE__);
-
-#else
-
-#define TRACE
-
-#endif // _DEBUG
-
-
-#define SIZE_OF_QUEUE 10
-#define INPORT 1025
 #define TRUE 1
 #define FALSE 0
-#define INADDR "127.0.0.1"
-// размер буфера
-#define BUF_SIZE 4096
+#define INPORT 1025
+#define SIZE_OF_QUEUE 10
 
 
 // обработать запрос
-int process_query(int client_sockfd);
+static int process_query(int client_sockfd);
 // закрыть сервер
-void close_server(int sig);
+static void close_server(int sig);
 
 
 int main(int avgc, char *argv[])
 {
-    // закрытие сервера
-    struct sigaction act;
-    act.sa_handler = close_server;
-    sigemptyset(&act.sa_mask);
-    act.sa_flags = 0;
-    sigaction(SIGINT, &act, 0);
+    // закрытие сервера при получении сигнала SIGINT
+    {
+        struct sigaction act;
+        act.sa_handler = close_server;
+        sigemptyset(&act.sa_mask);
+        act.sa_flags = 0;
+        sigaction(SIGINT, &act, 0);
+    }
 
     // объвления переменных для сервера
     int server_sockfd;
@@ -62,12 +45,13 @@ int main(int avgc, char *argv[])
 
     // именовать сокет
     server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = inet_addr(INADDR);
+    server_address.sin_addr.s_addr = htonl(INADDR_ANY);//inet_addr("127.0.0.1");
     server_address.sin_port = htons(INPORT);
     if (bind(server_sockfd, (struct sockaddr *)&server_address, (socklen_t)sizeof(server_address)))
     {
         // напечатать сообщение об ошибке именования сокета
         perror("server bind error");
+        // закрыть слушающий сокет
         //close(server_sockfd);
         exit(EXIT_FAILURE);
     }
@@ -77,6 +61,7 @@ int main(int avgc, char *argv[])
     {
         // напечатать сообщение об ошибке создания очереди соединений
         perror("server listen error");
+        // закрыть слушающий сокет
         //close(server_sockfd);
         exit(EXIT_FAILURE);
     }
@@ -108,8 +93,15 @@ int main(int avgc, char *argv[])
                 close(client_sockfd);
                 break;
             case 0:
+                // закрыть слушающий сокет
+                close(server_sockfd);
                 // обработать клиента в дочернем процессе процессе
                 exit(process_query(client_sockfd));
+                //int result = process_query(client_sockfd);
+                // закрыть клиентский сокет
+                //close(client_sockfd);
+                // закрыть процесс
+                //exit(result);
                 break;
             default:
                 // закрыть клиентский сокет
@@ -117,21 +109,21 @@ int main(int avgc, char *argv[])
                 break;
         }
     }
-
-    //exit(EXIT_FAILURE);
-    //exit(EXIT_SUCCESS);
 }
 
 
+#define COPY_BUF_SIZE 4096
+
+
 // копировать данные из одного файлового дескриптора в другой файловый дескриптор
-int copy(int fd_sour, int fd_dest)
+static int copy(int fd_sour, int fd_dest)
 {
-    void *buf[BUF_SIZE];
+    char buf[COPY_BUF_SIZE];
     int count;
     int result = 0;
     while (TRUE)
     {
-        count = read(fd_sour, buf, BUF_SIZE);
+        count = read(fd_sour, buf, sizeof(buf));
         if (count <= 0)
         {
             break;
@@ -147,24 +139,29 @@ int copy(int fd_sour, int fd_dest)
 }
 
 
+#define QUAERY_BUF_SIZE 4096
+#define PATH_BUF_SIZE 4096
 #define METHOD_GET "GET"
-#define METHOD_NOT_IMPLEMENTED "HTTP/1.1 501 Not Implemented\r\n\r\n<html><body><h1>501 Not Implemented</h1></body></html>"
-#define ROOT "/home/sergey"
+#define METHOD_NOT_IMPLEMENTED "HTTP/1.1 501 Not Implemented\r\n\r\n<html><body><h1 align=\"center\">501 Not Implemented</h1></body></html>"
+#define ROOT "/"
+#define HOME "/home/sergey"
 #define INDEX "/home/sergey/index.html"
 #define OK "HTTP/1.1 200 OK\r\n\r\n"
-#define NOT_FOUND "HTTP/1.1 404 Not Found\r\n\r\n<html><body><h1>404 Not Found</h1></body></html>"
+#define NOT_FOUND "HTTP/1.1 404 Not Found\r\n\r\n<html><body><h1 align=\"center\">404 Not Found</h1></body></html>"
 
 
-int process_query(int client_sockfd)
+// обработать запрос
+static int process_query(int client_sockfd)
 {
-    char buf[BUF_SIZE];
+    char buf[QUAERY_BUF_SIZE];
 
-    int count = read(client_sockfd, buf, BUF_SIZE - 1);
+    int count = read(client_sockfd, buf, sizeof(buf) - 1);
     if (count <= 0)
     {
         return EXIT_FAILURE;
     }
 
+    // защита от выхода за границы буфера
     buf[count] = '\0';
 
     char *method = strtok(buf, " ");
@@ -173,21 +170,22 @@ int process_query(int client_sockfd)
     if (strcmp(method, METHOD_GET) == 0)
     {
         int fd;
-        if (strcmp(uri, "/") == 0)
+        if (strcmp(uri, ROOT) == 0)
         {
             fd = open(INDEX, O_RDONLY);
         }
         else
         {
-            char path[BUF_SIZE];
-            strcpy(path, ROOT);
-            strcpy(path + sizeof(ROOT) - 1, uri);
+            char path[PATH_BUF_SIZE];
+            strcpy(path, HOME);
+            strcpy(path + sizeof(HOME) - 1, uri);
             fd = open(path, O_RDONLY);
         }
         if (fd >= 0)
         {
             write(client_sockfd, OK, sizeof(OK) - 1);
             copy(fd, client_sockfd);
+            close(fd);
         }
         else
         {
@@ -203,7 +201,8 @@ int process_query(int client_sockfd)
 }
 
 
-void close_server(int sig)
+// закрыть сервер
+static void close_server(int sig)
 {
     printf("\nserver is closed\n");
     exit(EXIT_SUCCESS);
