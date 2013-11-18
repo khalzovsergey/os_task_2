@@ -9,7 +9,7 @@
 
 #define TRUE 1
 #define FALSE 0
-#define INPORT 1025
+#define INPORT 81
 #define SIZE_OF_QUEUE 10
 
 
