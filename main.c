@@ -19,7 +19,7 @@ static int process_query(int client_sockfd);
 static void close_server(int sig);
 
 
-int main(int avgc, char *argv[])
+int main(int argc, char *argv[])
 {
     // закрытие сервера при получении сигнала SIGINT
     {
@@ -46,6 +46,14 @@ int main(int avgc, char *argv[])
     // именовать сокет
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = htonl(INADDR_ANY);//inet_addr("127.0.0.1");
+//    if (avgc > 1)
+//    {
+//        int inport = atoi(argv[1]);
+//        if (inport > 1024 && inport <= MAX_PORT)
+//        {
+//
+//        }
+//    }
     server_address.sin_port = htons(INPORT);
     if (bind(server_sockfd, (struct sockaddr *)&server_address, (socklen_t)sizeof(server_address)))
     {
@@ -83,6 +91,11 @@ int main(int avgc, char *argv[])
     {
         client_len = sizeof(client_address);
         client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_address, &client_len);
+        if (client_sockfd == -1)
+        {
+            perror("server accept error");
+            continue;
+        }
         printf("query number = %d\n", query_number++);
         switch (fork())
         {
@@ -112,15 +125,35 @@ int main(int avgc, char *argv[])
 }
 
 
+// отправить данные из буфера
+static size_t send_buf(int fd, void *buf, size_t count)
+{
+    size_t result = 0;
+    int offset;
+    while (count > 0)
+    {
+        offset = write(fd, buf, count);
+        if (offset < 0)
+        {
+            break;
+        }
+        buf += offset;
+        count -= offset;
+        result += offset;
+    }
+    return result;
+}
+
+
 #define COPY_BUF_SIZE 4096
 
 
-// копировать данные из одного файлового дескриптора в другой файловый дескриптор
-static int copy(int fd_sour, int fd_dest)
+// отправить файл
+static size_t send_file(int fd_sour, int fd_dest)
 {
     char buf[COPY_BUF_SIZE];
     int count;
-    int result = 0;
+    size_t result = 0;
     while (TRUE)
     {
         count = read(fd_sour, buf, sizeof(buf));
@@ -128,8 +161,7 @@ static int copy(int fd_sour, int fd_dest)
         {
             break;
         }
-        count = write(fd_dest, buf, count);
-        if (count <= 0)
+        if (send_buf(fd_dest, buf, count) < count)
         {
             break;
         }
@@ -144,8 +176,7 @@ static int copy(int fd_sour, int fd_dest)
 #define METHOD_GET "GET"
 #define METHOD_NOT_IMPLEMENTED "HTTP/1.1 501 Not Implemented\r\n\r\n<html><body><h1 align=\"center\">501 Not Implemented</h1></body></html>"
 #define ROOT "/"
-#define HOME "/home/sergey"
-#define INDEX "/home/sergey/index.html"
+#define INDEX "index.html"
 #define OK "HTTP/1.1 200 OK\r\n\r\n"
 #define NOT_FOUND "HTTP/1.1 404 Not Found\r\n\r\n<html><body><h1 align=\"center\">404 Not Found</h1></body></html>"
 
@@ -169,32 +200,29 @@ static int process_query(int client_sockfd)
 
     if (strcmp(method, METHOD_GET) == 0)
     {
-        int fd;
+        int fd = -1;
         if (strcmp(uri, ROOT) == 0)
         {
             fd = open(INDEX, O_RDONLY);
         }
-        else
+        else if (*uri != '\0')
         {
-            char path[PATH_BUF_SIZE];
-            strcpy(path, HOME);
-            strcpy(path + sizeof(HOME) - 1, uri);
-            fd = open(path, O_RDONLY);
+            fd = open(uri + sizeof(char), O_RDONLY);
         }
         if (fd >= 0)
         {
-            write(client_sockfd, OK, sizeof(OK) - 1);
-            copy(fd, client_sockfd);
+            send_buf(client_sockfd, OK, sizeof(OK) - 1);
+            send_file(fd, client_sockfd);
             close(fd);
         }
         else
         {
-            write(client_sockfd, NOT_FOUND, sizeof(NOT_FOUND) - 1);
+            send_buf(client_sockfd, NOT_FOUND, sizeof(NOT_FOUND) - 1);
         }
     }
     else
     {
-        write(client_sockfd, METHOD_NOT_IMPLEMENTED, sizeof(METHOD_NOT_IMPLEMENTED) - 1);
+        send_buf(client_sockfd, METHOD_NOT_IMPLEMENTED, sizeof(METHOD_NOT_IMPLEMENTED) - 1);
     }
 
     return EXIT_SUCCESS;
